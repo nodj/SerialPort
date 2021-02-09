@@ -7,7 +7,7 @@
 
 #include "SerialPort.hpp"
 
-SerialPort::SerialPort(const char *portName)
+SerialPort::SerialPort(const char *portName, int32_t Rate)
 {
     this->connected = false;
 
@@ -20,13 +20,18 @@ SerialPort::SerialPort(const char *portName)
                                 NULL);
     if (this->handler == INVALID_HANDLE_VALUE)
     {
-        if (GetLastError() == ERROR_FILE_NOT_FOUND)
+        auto gle = GetLastError();
+        if (gle == ERROR_FILE_NOT_FOUND)
         {
             std::cerr << "ERROR: Handle was not attached.Reason : " << portName << " not available\n";
         }
+        else if (gle == ERROR_ACCESS_DENIED)
+        {
+            std::cerr << "ERROR: Access denied (maybe already used ?)\n";
+        }
         else
         {
-            std::cerr << "ERROR!!!\n";
+            std::cerr << "ERROR: " << gle << "\n";
         }
     }
     else
@@ -39,21 +44,37 @@ SerialPort::SerialPort(const char *portName)
         }
         else
         {
-            dcbSerialParameters.BaudRate = CBR_9600;
+            dcbSerialParameters.BaudRate = DWORD(Rate);
+
+            // jd: see SERIAL_8N1 which configures the same stuff on arduino (HardwareSerial.h)
             dcbSerialParameters.ByteSize = 8;
             dcbSerialParameters.StopBits = ONESTOPBIT;
             dcbSerialParameters.Parity = NOPARITY;
+
+            // jd: auto reset the board on established connection
             dcbSerialParameters.fDtrControl = DTR_CONTROL_ENABLE;
 
+            std::cout << "before call to SetCommState\n";
+//             Sleep(5000);
+
+            std::cout << "call to SetCommState\n";
             if (!SetCommState(handler, &dcbSerialParameters))
             {
                 std::cout << "ALERT: could not set serial port parameters\n";
             }
             else
             {
+                std::cout << "aftercall to SetCommState\n";
                 this->connected = true;
-                PurgeComm(this->handler, PURGE_RXCLEAR | PURGE_TXCLEAR);
-                Sleep(ARDUINO_WAIT_TIME);
+//                 PurgeComm(this->handler, 0xf);
+//                 PurgeComm(this->handler, PURGE_RXCLEAR | PURGE_TXCLEAR);
+
+
+//                 DWORD NumberOfBytesRead;
+//                 uint8_t x;
+//                 while(ReadFile(this->handler, &x, 1, &NumberOfBytesRead, NULL), NumberOfBytesRead);
+
+//                 Sleep(ARDUINO_WAIT_TIME); // necessary ?
             }
         }
     }
@@ -70,7 +91,7 @@ SerialPort::~SerialPort()
 
 // Reading bytes from serial port to buffer;
 // returns read bytes count, or if error occurs, returns 0
-int SerialPort::readSerialPort(const char *buffer, unsigned int buf_size)
+uint32_t SerialPort::readSerialPort(uint8_t* buffer, unsigned int buf_size)
 {
     DWORD bytesRead{};
     unsigned int toRead = 0;
@@ -89,19 +110,21 @@ int SerialPort::readSerialPort(const char *buffer, unsigned int buf_size)
         }
     }
 
-    memset((void*) buffer, 0, buf_size);
+    memset(buffer, 0, buf_size);
 
-    if (ReadFile(this->handler, (void*) buffer, toRead, &bytesRead, NULL))
+    if (ReadFile(this->handler, buffer, toRead, &bytesRead, NULL))
     {
-        return bytesRead;
+        return (uint32_t )bytesRead;
     }
 
     return 0;
 }
 
+
+
 // Sending provided buffer to serial port;
 // returns true if succeed, false if not
-bool SerialPort::writeSerialPort(const char *buffer, unsigned int buf_size)
+bool SerialPort::writeSerialPort(const uint8_t* buffer, unsigned int buf_size)
 {
     DWORD bytesSend;
 
@@ -110,7 +133,7 @@ bool SerialPort::writeSerialPort(const char *buffer, unsigned int buf_size)
         ClearCommError(this->handler, &this->errors, &this->status);
         return false;
     }
-    
+
     return true;
 }
 
@@ -128,4 +151,14 @@ bool SerialPort::isConnected()
 void SerialPort::closeSerial()
 {
     CloseHandle(this->handler);
+}
+
+uint32_t SerialPort::available()
+{
+    if (!ClearCommError(this->handler, &this->errors, &this->status))
+    {
+        this->connected = false;
+        return 0;
+    }
+    return status.cbInQue;
 }
